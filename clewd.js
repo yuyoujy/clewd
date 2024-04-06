@@ -270,10 +270,6 @@ const updateParams = res => {
     });
     await checkResErr(bootstrapRes);
     const bootstrap = await bootstrapRes.json(), bootAccInfo = bootstrap.account.memberships.find(item => item.organization.capabilities.includes('chat')).organization;
-    if (uuidOrgArray.includes(bootAccInfo.uuid) && percentage <= 100 && Config.CookieArray?.length > 0 || bootAccInfo.api_disabled_reason && !bootAccInfo.api_disabled_until || !bootstrap.account.completed_verification_at) {
-        console.log(`[31m${bootAccInfo.api_disabled_reason ? 'Disabled' : !bootstrap.account.completed_verification_at ? 'Unverified' : 'Overlap'}![0m`);
-        return CookieCleaner(percentage);
-    } else uuidOrgArray.push(bootAccInfo.uuid);
     cookieModel = bootstrap.statsig.values.layer_configs["HPOHwBLNLQLxkj5Yn4bfSkgCQnBX28kPR7h/BNKdVLw="]?.value?.console_default_model_override?.model || bootstrap.statsig.values.dynamic_configs["6zA9wvTedwkzjLxWy9PVe7yydI00XDQ6L5Fejjq/2o8="]?.value?.model;
     isPro = bootAccInfo.capabilities.includes('claude_pro');
     if (!isPro && model && model != cookieModel && !Config.Settings.PassParams) return CookieChanger();
@@ -283,6 +279,10 @@ const updateParams = res => {
         cookieModel, //
         capabilities: bootAccInfo.capabilities
     }); //↓
+    if (uuidOrgArray.includes(bootAccInfo.uuid) && percentage <= 100 && Config.CookieArray?.length > 0 || bootAccInfo.api_disabled_reason && !bootAccInfo.api_disabled_until || !bootstrap.account.completed_verification_at) {
+        console.log(`[31m${bootAccInfo.api_disabled_reason ? 'Disabled' : !bootstrap.account.completed_verification_at ? 'Unverified' : 'Overlap'}![0m`);
+        return CookieCleaner(percentage);
+    } else uuidOrgArray.push(bootAccInfo.uuid);
     if (Config.Cookiecounter < 0) {
         console.log(`[progress]: [32m${percentage.toFixed(2)}%[0m\n[length]: [33m${Config.CookieArray.length}[0m\n`);
         return CookieChanger();
@@ -371,16 +371,33 @@ const updateParams = res => {
     }
     switch (req.url) {
       case '/v1/models':
-        res.json({
 /***************************** */
-            data: [ //data: AI.mdl().map((name => ({
-                ...AI.mdl().map((name => ({ id: name }))), {
-                    id: 'claude-default'            },{
-                    id: 'claude-1.3'                },{
-                    id: 'claude-instant-1.1'        //id: name
-            }] //})))
+        (async (req, res) => {
+            let models;
+            if (/oaiKey:/.test(req.headers.authorization)) {
+                try {
+                    const modelsRes = await fetch(Config.api_rProxy.replace(/(\/v1)?\/? *$/, '') + '/v1/models', {
+                        method: 'GET',
+                        headers: { authorization: req.headers.authorization.match(/(?<=oaiKey:).*/)?.[0].split(',')[0].trim() }
+                    });
+                    models = await modelsRes.json();
+                } catch(err) {}
+            }
+            res.json({
+                data: [
+                    ...AI.mdl().map((name => ({ id: name }))), {
+                        id: 'claude-default'            },{
+                        id: 'claude-1.3'                },{
+                        id: 'claude-instant-1.1'
+                }].concat(models?.data).reduce((acc, current) => {
+                    if (current && !acc.some(model => model.id === current.id)) {
+                        acc.push(current);
+                    }
+                    return acc;
+                }, [])
+            });
+        })(req, res); //res.json({\n    data: AI.mdl().map((name => ({\n        id: name\n    })))\n});
 /***************************** */
-        });
         break;
 
       case '/v1/chat/completions':
@@ -403,7 +420,7 @@ const updateParams = res => {
                     temperature = typeof temperature === 'number' ? Math.max(.1, Math.min(1, temperature)) : undefined; //temperature = Math.max(.1, Math.min(1, temperature));
                     let {messages} = body;
 /************************* */
-                    const thirdKey = req.headers.authorization?.match(/(?<=3rdKey:).*/);
+                    const thirdKey = req.headers.authorization?.match(/(?<=(3rd|oai)Key:).*/), oaiAPI = /oaiKey:/.test(req.headers.authorization);
                     apiKey = thirdKey?.[0].split(',').map(item => item.trim()) || req.headers.authorization?.match(/sk-ant-api\d\d-[\w-]{86}-[\w-]{6}AA/g);
                     model = apiKey || Config.Settings.PassParams && /claude-(?!default)/.test(body.model) || isPro && AI.mdl().includes(body.model) ? body.model : cookieModel;
                     let max_tokens_to_sample = body.max_tokens, stop_sequences = body.stop || [], top_p = typeof body.top_p === 'number' ? body.top_p : undefined, top_k = typeof body.top_k === 'number' ? body.top_k : undefined;
@@ -637,11 +654,11 @@ const updateParams = res => {
                     })(messages, type);
 /******************************** */
                     const messagesAPI = /<\|messagesAPI\|>/.test(prompt) || /claude-[3-9]/.test(model) && !/<\|completeAPI\|>/.test(prompt), messagesLog = /<\|messagesLog\|>/.test(prompt);
-                    apiKey && messagesAPI && (type = 'msg_api');
+                    apiKey && (type = oaiAPI ? 'oai_api' : messagesAPI ? 'msg_api' : type);
                     prompt = Config.Settings.xmlPlot ? xmlPlot(prompt, !/claude-(2\.[1-9]|[3-9])/.test(model)) : apiKey ? `\n\nHuman: ${genericFixes(prompt)}\n\nAssistant:` : genericFixes(prompt).trim();
                     if (Config.Settings.FullColon) if (/claude-(2\.(1-|[2-9])|[3-9])/.test(model)) {
                         stop_sequences.push('\n\nHuman:', '\n\nAssistant:', '\n\r\nHuman:', '\n\r\nAssistant:');
-                        prompt = apiKey ? prompt.replace(/(?<!\n\nHuman:.*)\n\n(Assistant:)/gs, '\n\r\n$1').replace(/\n\n(Human:)(?!.*\n\nAssistant:)/gs, '\n\r\n$1') : prompt.replace(/\n\n(Human|Assistant):/g, '\n\r\n$1:');
+                        prompt = apiKey && !oaiAPI ? prompt.replace(/(?<!\n\nHuman:.*)\n\n(Assistant:)/gs, '\n\r\n$1').replace(/\n\n(Human:)(?!.*\n\nAssistant:)/gs, '\n\r\n$1') : prompt.replace(/\n\n(Human|Assistant):/g, '\n\r\n$1:');
                     } else prompt = apiKey ? prompt.replace(/(?<!\n\nHuman:.*)(\n\nAssistant):/gs, '$1：').replace(/(\n\nHuman):(?!.*\n\nAssistant:)/gs, '$1：') : prompt.replace(/\n\n(Human|Assistant):/g, '\n\n$1：');
                     prompt = padtxt(prompt);
 /******************************** */
@@ -653,7 +670,7 @@ const updateParams = res => {
                         if (apiKey) {
                             let messages, system;
                             if (messagesAPI) {
-                                const rounds = prompt.split('\n\nHuman:');
+                                const rounds = prompt.replace(/^(?!.*\n\nHuman:)/s, '\n\nHuman:').split('\n\nHuman:');
                                 messages = rounds.slice(1).flatMap(round => {
                                     const turns = round.split('\n\nAssistant:');
                                     return [{role: 'user', content: turns[0].trim()}].concat(turns.slice(1).flatMap(turn => [{role: 'assistant', content: turn.trim()}]));
@@ -662,10 +679,10 @@ const updateParams = res => {
                                         acc[acc.length - 1].content += (current.role === 'user' ? '\n\r\nHuman:' : '\n\r\nAssistant:') + current.content;
                                     } else acc.push(current);
                                     return acc;
-                                }, []), system = rounds[0].trim();
+                                }, []), oaiAPI ? messages.unshift({role: 'system', content: rounds[0].trim()}) : system = rounds[0].trim();
                                 messagesLog && console.log({system, messages});
                             }
-                            const res = await fetch((Config.api_rProxy || 'https://api.anthropic.com').replace(/(\/v1)? *$/, thirdKey ? '$1' : '/v1').trim('/') + (messagesAPI ? '/messages' : '/complete'), {
+                            const res = await fetch((Config.api_rProxy || 'https://api.anthropic.com').replace(/(\/v1)? *$/, thirdKey ? '$1' : '/v1').trim('/') + (oaiAPI ? '/chat/completions' : messagesAPI ? '/messages' : '/complete'), {
                                 method: 'POST',
                                 signal,
                                 headers: {
@@ -674,7 +691,7 @@ const updateParams = res => {
                                     'anthropic-version': '2023-06-01'
                                 },
                                 body: JSON.stringify({
-                                    ...messagesAPI ? {
+                                    ...oaiAPI || messagesAPI ? {
                                         max_tokens : max_tokens_to_sample,
                                         messages,
                                         system
